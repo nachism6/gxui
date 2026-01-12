@@ -461,8 +461,40 @@ export function createEmptyRequest(method: MethodMeta): Record<string, unknown> 
 export interface CallResult {
   response: unknown
   error: unknown
+  grpcStatus?: number
+  grpcMessage?: string
   duration: number
   status: 'success' | 'error'
+}
+
+// gRPC status code names
+const GRPC_STATUS_NAMES: Record<number, string> = {
+  0: 'OK',
+  1: 'CANCELLED',
+  2: 'UNKNOWN',
+  3: 'INVALID_ARGUMENT',
+  4: 'DEADLINE_EXCEEDED',
+  5: 'NOT_FOUND',
+  6: 'ALREADY_EXISTS',
+  7: 'PERMISSION_DENIED',
+  8: 'RESOURCE_EXHAUSTED',
+  9: 'FAILED_PRECONDITION',
+  10: 'ABORTED',
+  11: 'OUT_OF_RANGE',
+  12: 'UNIMPLEMENTED',
+  13: 'INTERNAL',
+  14: 'UNAVAILABLE',
+  15: 'DATA_LOSS',
+  16: 'UNAUTHENTICATED',
+}
+
+function parseGrpcTrailers(trailerText: string): { status?: number; message?: string } {
+  const statusMatch = trailerText.match(/grpc-status:\s*(\d+)/)
+  const messageMatch = trailerText.match(/grpc-message:\s*([^\r\n]*)/)
+  return {
+    status: statusMatch ? parseInt(statusMatch[1], 10) : undefined,
+    message: messageMatch ? decodeURIComponent(messageMatch[1]) : undefined,
+  }
 }
 
 export async function executeCall(
@@ -525,11 +557,29 @@ export async function executeCall(
     const responseBuffer = await response.arrayBuffer()
     const responseBytes = new Uint8Array(responseBuffer)
 
+    // Check response headers for gRPC status (some servers send it there)
+    const headerGrpcStatus = response.headers.get('grpc-status')
+    const headerGrpcMessage = response.headers.get('grpc-message')
+
     // Parse grpc-web response
     if (responseBytes.length < 5) {
+      // Try to get error from headers
+      if (headerGrpcStatus && headerGrpcStatus !== '0') {
+        const grpcStatus = parseInt(headerGrpcStatus, 10)
+        const grpcMessage = headerGrpcMessage ? decodeURIComponent(headerGrpcMessage) : undefined
+        const statusName = GRPC_STATUS_NAMES[grpcStatus] || `CODE_${grpcStatus}`
+        return {
+          response: null,
+          error: `${statusName}: ${grpcMessage || 'Unknown error'}`,
+          grpcStatus,
+          grpcMessage,
+          duration: performance.now() - start,
+          status: 'error',
+        }
+      }
       return {
         response: null,
-        error: 'Empty response',
+        error: `Empty response (${responseBytes.length} bytes)`,
         duration: performance.now() - start,
         status: 'error',
       }
@@ -538,10 +588,13 @@ export async function executeCall(
     // Check for trailers-only response (grpc error)
     if (responseBytes[0] === 0x80) {
       const trailerText = new TextDecoder().decode(responseBytes.slice(5))
-      const grpcMessage = trailerText.match(/grpc-message:([^\r\n]*)/)?.[1] || 'Unknown error'
+      const { status: grpcStatus, message: grpcMessage } = parseGrpcTrailers(trailerText)
+      const statusName = grpcStatus !== undefined ? GRPC_STATUS_NAMES[grpcStatus] || `CODE_${grpcStatus}` : 'UNKNOWN'
       return {
         response: null,
-        error: decodeURIComponent(grpcMessage),
+        error: `${statusName}: ${grpcMessage || 'Unknown error'}`,
+        grpcStatus,
+        grpcMessage,
         duration: performance.now() - start,
         status: 'error',
       }
@@ -550,6 +603,28 @@ export async function executeCall(
     // Extract message from frame
     const msgLen = (responseBytes[1] << 24) | (responseBytes[2] << 16) | (responseBytes[3] << 8) | responseBytes[4]
     const msgBytes = responseBytes.slice(5, 5 + msgLen)
+
+    // Check for trailers after the message
+    const trailerStart = 5 + msgLen
+    if (trailerStart < responseBytes.length && responseBytes[trailerStart] === 0x80) {
+      const trailerLen = (responseBytes[trailerStart + 1] << 24) | (responseBytes[trailerStart + 2] << 16) |
+                         (responseBytes[trailerStart + 3] << 8) | responseBytes[trailerStart + 4]
+      const trailerText = new TextDecoder().decode(responseBytes.slice(trailerStart + 5, trailerStart + 5 + trailerLen))
+      const { status: grpcStatus, message: grpcMessage } = parseGrpcTrailers(trailerText)
+
+      // If grpc-status is non-zero, it's an error
+      if (grpcStatus && grpcStatus !== 0) {
+        const statusName = GRPC_STATUS_NAMES[grpcStatus] || `CODE_${grpcStatus}`
+        return {
+          response: null,
+          error: `${statusName}: ${grpcMessage || 'Unknown error'}`,
+          grpcStatus,
+          grpcMessage,
+          duration: performance.now() - start,
+          status: 'error',
+        }
+      }
+    }
 
     // Decode response
     const decoded = method.outputType.decode(msgBytes)
@@ -566,9 +641,19 @@ export async function executeCall(
       status: 'success',
     }
   } catch (err) {
+    // Handle network/connection errors with more detail
+    const errorMessage = err instanceof Error ? err.message : String(err)
+    let displayError = errorMessage
+
+    if (errorMessage.includes('Failed to fetch') || errorMessage.includes('NetworkError')) {
+      displayError = `Network Error: Unable to connect to server. Check if the URL is correct and the server is running.`
+    } else if (errorMessage.includes('CORS')) {
+      displayError = `CORS Error: The server does not allow requests from this origin.`
+    }
+
     return {
       response: null,
-      error: err instanceof Error ? err.message : String(err),
+      error: displayError,
       duration: performance.now() - start,
       status: 'error',
     }

@@ -247,7 +247,12 @@ function MethodPanel({
         <div className={`response-section ${result.status}`}>
           <div className="section-header">
             <h4>Response</h4>
-            <span className="duration">{result.duration.toFixed(2)}ms</span>
+            <div className="response-meta">
+              {result.grpcStatus !== undefined && (
+                <span className="grpc-status">gRPC {result.grpcStatus}</span>
+              )}
+              <span className="duration">{result.duration.toFixed(2)}ms</span>
+            </div>
           </div>
           <pre className="response-json">
             {result.status === 'error'

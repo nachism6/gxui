@@ -369,6 +369,26 @@ body {
   background: #3a1e1e;
 }
 
+.response-meta {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.grpc-status {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: #5a1d1d;
+  color: #f48771;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+}
+
+.response-section.success .grpc-status {
+  background: #1e3a1e;
+  color: #89d185;
+}
+
 .duration {
   font-size: 10px;
   color: #6e6e6e;
