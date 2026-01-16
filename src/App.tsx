@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback } from "react";
 import {
   loadProtoFiles,
   createEmptyRequest,
@@ -8,86 +8,101 @@ import {
   type MethodMeta,
   type CallResult,
   type FieldMeta,
-} from './lib/proto-loader'
-import './App.css'
+} from "./lib/proto-loader";
+import { executeScript } from "./lib/script-executor";
+import { PreScriptModal } from "./components/PreScriptModal";
+import "./App.css";
 
 // Check if running in Tauri
-const isTauri = typeof window !== 'undefined' &&
-  (('__TAURI__' in window) || ('__TAURI_INTERNALS__' in window))
+const isTauri =
+  typeof window !== "undefined" &&
+  ("__TAURI__" in window || "__TAURI_INTERNALS__" in window);
 
-const DEFAULT_URL = 'https://example.com'
-const STORAGE_KEY = 'gx-ui-state'
+const DEFAULT_URL = "https://example.com";
+const STORAGE_KEY = "gx-ui-state";
 
 const jsonStringify = (obj: unknown) =>
-  JSON.stringify(obj, (_, v) => typeof v === 'bigint' ? v.toString() : v, 2)
+  JSON.stringify(obj, (_, v) => (typeof v === "bigint" ? v.toString() : v), 2);
 
 // Persistence helpers
+interface PreScriptState {
+  code: string;
+  environment: Record<string, string>;
+  enabled: boolean;
+}
+
 interface PersistedState {
-  baseUrl: string
-  headersText: string
-  methodCache: Record<string, MethodCache>
+  baseUrl: string;
+  headersText: string;
+  methodCache: Record<string, MethodCache>;
+  preScript?: PreScriptState;
 }
 
 function loadPersistedState(): Partial<PersistedState> {
   try {
-    const saved = localStorage.getItem(STORAGE_KEY)
-    if (saved) return JSON.parse(saved)
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) return JSON.parse(saved);
   } catch (e) {
-    console.warn('Failed to load persisted state:', e)
+    console.warn("Failed to load persisted state:", e);
   }
-  return {}
+  return {};
 }
 
 function savePersistedState(state: PersistedState) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   } catch (e) {
-    console.warn('Failed to save state:', e)
+    console.warn("Failed to save state:", e);
   }
 }
 
 // Parse headers from textarea format (newline separated, key:value)
 function parseHeaders(headersText: string): Record<string, string> {
-  const headers: Record<string, string> = {}
-  for (const line of headersText.split('\n')) {
-    const trimmed = line.trim()
-    if (!trimmed) continue
-    const colonIndex = trimmed.indexOf(':')
+  const headers: Record<string, string> = {};
+  for (const line of headersText.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const colonIndex = trimmed.indexOf(":");
     if (colonIndex > 0) {
-      const key = trimmed.slice(0, colonIndex).trim()
-      const value = trimmed.slice(colonIndex + 1).trim()
-      if (key) headers[key] = value
+      const key = trimmed.slice(0, colonIndex).trim();
+      const value = trimmed.slice(colonIndex + 1).trim();
+      if (key) headers[key] = value;
     }
   }
-  return headers
+  return headers;
 }
 
 interface MethodCache {
-  request: string
-  defaultRequest: string
-  result: CallResult | null
+  request: string;
+  defaultRequest: string;
+  result: CallResult | null;
 }
 
 // Recursive field documentation component
 function FieldDoc({ field, depth = 0 }: { field: FieldMeta; depth?: number }) {
-  const [expanded, setExpanded] = useState(depth < 2)
-  const hasNested = field.kind === 'message' && field.messageType
+  const [expanded, setExpanded] = useState(depth < 2);
+  const hasNested = field.kind === "message" && field.messageType;
 
   return (
     <div className="field-doc" style={{ marginLeft: depth * 12 }}>
-      <div className="field-header" onClick={() => hasNested && setExpanded(!expanded)}>
+      <div
+        className="field-header"
+        onClick={() => hasNested && setExpanded(!expanded)}
+      >
         <span className="field-name">
-          {hasNested && <span className="expand-icon">{expanded ? '▼' : '▶'}</span>}
+          {hasNested && (
+            <span className="expand-icon">{expanded ? "▼" : "▶"}</span>
+          )}
           {field.name}
         </span>
         <span className="field-type">
-          {field.repeated && 'repeated '}
-          {field.optional && 'optional '}
+          {field.repeated && "repeated "}
+          {field.optional && "optional "}
           {field.type}
         </span>
       </div>
 
-      {field.kind === 'enum' && field.enumValues && (
+      {field.kind === "enum" && field.enumValues && (
         <div className="enum-values">
           {field.enumValues.map(([name, value]) => (
             <div key={name} className="enum-value">
@@ -106,26 +121,27 @@ function FieldDoc({ field, depth = 0 }: { field: FieldMeta; depth?: number }) {
         </div>
       )}
     </div>
-  )
+  );
 }
 
 function DocPanel({ method }: { method: MethodMeta }) {
-  const [tab, setTab] = useState<'request' | 'response'>('request')
-  const fields = tab === 'request' ? method.inputFields : method.outputFields
-  const typeName = tab === 'request' ? method.inputType.name : method.outputType.name
+  const [tab, setTab] = useState<"request" | "response">("request");
+  const fields = tab === "request" ? method.inputFields : method.outputFields;
+  const typeName =
+    tab === "request" ? method.inputType.name : method.outputType.name;
 
   return (
     <div className="doc-panel">
       <div className="doc-tabs">
         <button
-          className={`doc-tab ${tab === 'request' ? 'active' : ''}`}
-          onClick={() => setTab('request')}
+          className={`doc-tab ${tab === "request" ? "active" : ""}`}
+          onClick={() => setTab("request")}
         >
           Request
         </button>
         <button
-          className={`doc-tab ${tab === 'response' ? 'active' : ''}`}
-          onClick={() => setTab('response')}
+          className={`doc-tab ${tab === "response" ? "active" : ""}`}
+          onClick={() => setTab("response")}
         >
           Response
         </button>
@@ -144,7 +160,7 @@ function DocPanel({ method }: { method: MethodMeta }) {
         )}
       </div>
     </div>
-  )
+  );
 }
 
 function MethodPanel({
@@ -154,63 +170,122 @@ function MethodPanel({
   headersText,
   cache,
   onCacheUpdate,
+  preScriptState,
+  onUpdatePreScriptEnv,
+  scriptLogs,
+  onSetScriptLogs,
 }: {
-  service: ServiceMeta
-  method: MethodMeta
-  baseUrl: string
-  headersText: string
-  cache: MethodCache | undefined
-  onCacheUpdate: (request: string, defaultRequest: string, result: CallResult | null) => void
+  service: ServiceMeta;
+  method: MethodMeta;
+  baseUrl: string;
+  headersText: string;
+  cache: MethodCache | undefined;
+  onCacheUpdate: (
+    request: string,
+    defaultRequest: string,
+    result: CallResult | null,
+  ) => void;
+  preScriptState: PreScriptState;
+  onUpdatePreScriptEnv: (env: Record<string, string>) => void;
+  scriptLogs: string[];
+  onSetScriptLogs: (logs: string[]) => void;
 }) {
-  const [jsonText, setJsonText] = useState('')
-  const [result, setResult] = useState<CallResult | null>(null)
-  const [loading, setLoading] = useState(false)
+  const [jsonText, setJsonText] = useState("");
+  const [result, setResult] = useState<CallResult | null>(null);
+  const [loading, setLoading] = useState(false);
 
-  const defaultRequest = jsonStringify(createEmptyRequest(method))
+  const defaultRequest = jsonStringify(createEmptyRequest(method));
 
   useEffect(() => {
     if (cache) {
       // If default format changed (e.g. proto updated), reset to new default
-      if (cache.defaultRequest !== defaultRequest && cache.request === cache.defaultRequest) {
-        setJsonText(defaultRequest)
-        setResult(null)
-        onCacheUpdate(defaultRequest, defaultRequest, null)
+      if (
+        cache.defaultRequest !== defaultRequest &&
+        cache.request === cache.defaultRequest
+      ) {
+        setJsonText(defaultRequest);
+        setResult(null);
+        onCacheUpdate(defaultRequest, defaultRequest, null);
       } else {
-        setJsonText(cache.request)
-        setResult(cache.result)
+        setJsonText(cache.request);
+        setResult(cache.result);
       }
     } else {
-      setJsonText(defaultRequest)
-      setResult(null)
-      onCacheUpdate(defaultRequest, defaultRequest, null)
+      setJsonText(defaultRequest);
+      setResult(null);
+      onCacheUpdate(defaultRequest, defaultRequest, null);
     }
-  }, [method, cache, onCacheUpdate, defaultRequest])
+  }, [method, cache, onCacheUpdate, defaultRequest]);
 
   const handleJsonChange = (value: string) => {
-    setJsonText(value)
-    onCacheUpdate(value, defaultRequest, result)
-  }
+    setJsonText(value);
+    onCacheUpdate(value, defaultRequest, result);
+  };
 
   const handleExecute = async () => {
-    setLoading(true)
+    setLoading(true);
     try {
-      const reqData = JSON.parse(jsonText)
-      const headers = parseHeaders(headersText)
-      const res = await executeCall(service, method, reqData, baseUrl, Object.keys(headers).length > 0 ? headers : undefined)
-      setResult(res)
-      onCacheUpdate(jsonText, defaultRequest, res)
+      let reqData = JSON.parse(jsonText);
+      let headers = parseHeaders(headersText);
+      let url = baseUrl;
+
+      // Execute pre-script if enabled
+      if (preScriptState?.enabled && preScriptState?.code) {
+        try {
+          const scriptResult = executeScript(preScriptState.code, {
+            request: {
+              body: reqData,
+              headers,
+              url,
+            },
+            environment: { ...preScriptState.environment },
+          });
+
+          // Apply modifications (even if script had errors)
+          reqData = scriptResult.context.request.body;
+          headers = scriptResult.context.request.headers;
+          url = scriptResult.context.request.url;
+          onUpdatePreScriptEnv(scriptResult.context.environment);
+
+          // Store logs for display
+          onSetScriptLogs(scriptResult.logs);
+
+          if (scriptResult.error) {
+            onSetScriptLogs([
+              ...scriptResult.logs,
+              `✗ Script error: ${scriptResult.error}`,
+              "Note: Request will proceed with modifications made before error",
+            ]);
+          }
+        } catch (scriptErr) {
+          console.warn("Pre-script execution failed:", scriptErr);
+          onSetScriptLogs([
+            `✗ Script error: ${scriptErr instanceof Error ? scriptErr.message : String(scriptErr)}`,
+          ]);
+        }
+      }
+
+      const res = await executeCall(
+        service,
+        method,
+        reqData,
+        url,
+        Object.keys(headers).length > 0 ? headers : undefined,
+      );
+      setResult(res);
+      onCacheUpdate(jsonText, defaultRequest, res);
     } catch (err) {
       const errorResult: CallResult = {
         response: null,
         error: err instanceof Error ? err.message : String(err),
         duration: 0,
-        status: 'error',
-      }
-      setResult(errorResult)
-      onCacheUpdate(jsonText, defaultRequest, errorResult)
+        status: "error",
+      };
+      setResult(errorResult);
+      onCacheUpdate(jsonText, defaultRequest, errorResult);
     }
-    setLoading(false)
-  }
+    setLoading(false);
+  };
 
   return (
     <div className="method-panel">
@@ -239,9 +314,27 @@ function MethodPanel({
           onClick={handleExecute}
           disabled={loading}
         >
-          {loading ? 'Executing...' : 'Execute'}
+          {loading ? "Executing..." : "Execute"}
         </button>
       </div>
+
+      {scriptLogs.length > 0 && (
+        <div className="script-logs-section">
+          <div className="section-header">
+            <h4>Pre-Script Console</h4>
+            <button className="clear-logs" onClick={() => onSetScriptLogs([])}>
+              Clear
+            </button>
+          </div>
+          <div className="console-output">
+            {scriptLogs.map((log, i) => (
+              <div key={i} className="console-log">
+                {log}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {result && (
         <div className={`response-section ${result.status}`}>
@@ -255,36 +348,51 @@ function MethodPanel({
             </div>
           </div>
           <pre className="response-json">
-            {result.status === 'error'
+            {result.status === "error"
               ? String(result.error)
               : jsonStringify(result.response)}
           </pre>
         </div>
       )}
     </div>
-  )
+  );
 }
 
 function App() {
   // Load persisted state on mount
-  const [persisted] = useState(() => loadPersistedState())
+  const [persisted] = useState(() => loadPersistedState());
 
-  const [protoPath, setProtoPath] = useState('')
-  const [services, setServices] = useState<ServiceMeta[]>([])
-  const [selectedService, setSelectedService] = useState<ServiceMeta | null>(null)
-  const [selectedMethod, setSelectedMethod] = useState<MethodMeta | null>(null)
-  const [baseUrl, setBaseUrl] = useState(persisted.baseUrl || DEFAULT_URL)
-  const [headersText, setHeadersText] = useState(persisted.headersText || '')
-  const [search, setSearch] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-  const [showDocPanel, setShowDocPanel] = useState(true)
-  const [methodCache, setMethodCache] = useState<Map<string, MethodCache>>(() => {
-    if (persisted.methodCache) {
-      return new Map(Object.entries(persisted.methodCache))
-    }
-    return new Map()
-  })
+  const [protoPath, setProtoPath] = useState("");
+  const [services, setServices] = useState<ServiceMeta[]>([]);
+  const [selectedService, setSelectedService] = useState<ServiceMeta | null>(
+    null,
+  );
+  const [selectedMethod, setSelectedMethod] = useState<MethodMeta | null>(null);
+  const [baseUrl, setBaseUrl] = useState(persisted.baseUrl || DEFAULT_URL);
+  const [headersText, setHeadersText] = useState(persisted.headersText || "");
+  const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [showDocPanel, setShowDocPanel] = useState(true);
+  const [showPreScriptModal, setShowPreScriptModal] = useState(false);
+  const [methodCache, setMethodCache] = useState<Map<string, MethodCache>>(
+    () => {
+      if (persisted.methodCache) {
+        return new Map(Object.entries(persisted.methodCache));
+      }
+      return new Map();
+    },
+  );
+  const [preScriptState, setPreScriptState] = useState<PreScriptState>(() => {
+    return (
+      persisted.preScript || {
+        code: "",
+        environment: {},
+        enabled: false,
+      }
+    );
+  });
+  const [scriptLogs, setScriptLogs] = useState<string[]>([]);
 
   // Save state to localStorage when it changes
   useEffect(() => {
@@ -292,183 +400,199 @@ function App() {
       baseUrl,
       headersText,
       methodCache: Object.fromEntries(methodCache),
-    })
-  }, [baseUrl, headersText, methodCache])
+      preScript: preScriptState,
+    });
+  }, [baseUrl, headersText, methodCache, preScriptState]);
 
   const getMethodKey = (service: ServiceMeta, method: MethodMeta) =>
-    `${protoPath}:${service.fullName}.${method.name}`
+    `${protoPath}:${service.fullName}.${method.name}`;
 
-  const handleCacheUpdate = useCallback((service: ServiceMeta, method: MethodMeta, request: string, defaultRequest: string, result: CallResult | null) => {
-    const key = `${protoPath}:${service.fullName}.${method.name}`
-    setMethodCache(prev => {
-      const next = new Map(prev)
-      next.set(key, { request, defaultRequest, result })
-      return next
-    })
-  }, [protoPath])
+  const handleCacheUpdate = useCallback(
+    (
+      service: ServiceMeta,
+      method: MethodMeta,
+      request: string,
+      defaultRequest: string,
+      result: CallResult | null,
+    ) => {
+      const key = `${protoPath}:${service.fullName}.${method.name}`;
+      setMethodCache((prev) => {
+        const next = new Map(prev);
+        next.set(key, { request, defaultRequest, result });
+        return next;
+      });
+    },
+    [protoPath],
+  );
 
   const isMethodDirty = (service: ServiceMeta, method: MethodMeta) => {
-    const cache = methodCache.get(getMethodKey(service, method))
-    if (!cache) return false
-    return cache.request !== cache.defaultRequest || cache.result !== null
-  }
+    const cache = methodCache.get(getMethodKey(service, method));
+    if (!cache) return false;
+    return cache.request !== cache.defaultRequest || cache.result !== null;
+  };
 
   const loadProtos = useCallback(async (dirPath: string) => {
-    setLoading(true)
-    setError('')
-    setServices([])
-    setSelectedService(null)
-    setSelectedMethod(null)
+    setLoading(true);
+    setError("");
+    setServices([]);
+    setSelectedService(null);
+    setSelectedMethod(null);
 
     try {
-      const protoFiles: Array<{ filename: string; content: string }> = []
+      const protoFiles: Array<{ filename: string; content: string }> = [];
 
       if (isTauri) {
         // Use Tauri fs API
-        const { readDir, readTextFile } = await import('@tauri-apps/plugin-fs')
+        const { readDir, readTextFile } = await import("@tauri-apps/plugin-fs");
 
         async function readProtoFilesRecursive(dir: string) {
-          const entries = await readDir(dir)
+          const entries = await readDir(dir);
           for (const entry of entries) {
-            const fullPath = `${dir}/${entry.name}`
+            const fullPath = `${dir}/${entry.name}`;
             if (entry.isDirectory) {
-              await readProtoFilesRecursive(fullPath)
-            } else if (entry.name?.endsWith('.proto')) {
+              await readProtoFilesRecursive(fullPath);
+            } else if (entry.name?.endsWith(".proto")) {
               try {
-                const content = await readTextFile(fullPath)
-                protoFiles.push({ filename: entry.name, content })
+                const content = await readTextFile(fullPath);
+                protoFiles.push({ filename: entry.name, content });
               } catch (e) {
-                console.warn(`Failed to read ${fullPath}:`, e)
+                console.warn(`Failed to read ${fullPath}:`, e);
               }
             }
           }
         }
 
-        await readProtoFilesRecursive(dirPath)
+        await readProtoFilesRecursive(dirPath);
       } else {
-        setError('File system access requires the desktop app. Use "Paste Proto" to paste proto content directly.')
-        setLoading(false)
-        return
+        setError(
+          'File system access requires the desktop app. Use "Paste Proto" to paste proto content directly.',
+        );
+        setLoading(false);
+        return;
       }
 
       if (protoFiles.length === 0) {
-        setError('No .proto files found in directory')
-        setLoading(false)
-        return
+        setError("No .proto files found in directory");
+        setLoading(false);
+        return;
       }
 
-      const result = await loadProtoFiles(protoFiles)
+      const result = await loadProtoFiles(protoFiles);
 
       if (result.error) {
-        setError(result.error)
+        setError(result.error);
       } else if (result.services.length === 0) {
-        setError('No services found in proto files')
+        setError("No services found in proto files");
       } else {
-        setServices(result.services)
+        setServices(result.services);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      setError(err instanceof Error ? err.message : String(err));
     }
 
-    setLoading(false)
-  }, [])
+    setLoading(false);
+  }, []);
 
   const handleSelectDirectory = async () => {
     if (isTauri) {
       try {
-        const { open } = await import('@tauri-apps/plugin-dialog')
+        const { open } = await import("@tauri-apps/plugin-dialog");
         const selected = await open({
           directory: true,
           multiple: false,
-          title: 'Select Proto Files Directory',
-        })
+          title: "Select Proto Files Directory",
+        });
 
-        if (selected && typeof selected === 'string') {
-          setProtoPath(selected)
-          await loadProtos(selected)
+        if (selected && typeof selected === "string") {
+          setProtoPath(selected);
+          await loadProtos(selected);
         }
       } catch (err) {
-        setError(err instanceof Error ? err.message : String(err))
+        setError(err instanceof Error ? err.message : String(err));
       }
     } else {
       // Use browser File System Access API
       try {
-        const dirHandle = await (window as any).showDirectoryPicker()
-        await loadFromDirectoryHandle(dirHandle)
+        const dirHandle = await (window as any).showDirectoryPicker();
+        await loadFromDirectoryHandle(dirHandle);
       } catch (err) {
-        if ((err as Error).name !== 'AbortError') {
-          setError(err instanceof Error ? err.message : String(err))
+        if ((err as Error).name !== "AbortError") {
+          setError(err instanceof Error ? err.message : String(err));
         }
       }
     }
-  }
+  };
 
   const loadFromDirectoryHandle = async (dirHandle: any) => {
-    setLoading(true)
-    setError('')
-    setServices([])
-    setSelectedService(null)
-    setSelectedMethod(null)
+    setLoading(true);
+    setError("");
+    setServices([]);
+    setSelectedService(null);
+    setSelectedMethod(null);
 
-    const protoFiles: Array<{ filename: string; content: string }> = []
+    const protoFiles: Array<{ filename: string; content: string }> = [];
 
-    async function readRecursive(handle: any, path: string = '') {
+    async function readRecursive(handle: any, path: string = "") {
       for await (const entry of handle.values()) {
-        if (entry.kind === 'directory') {
-          await readRecursive(entry, `${path}${entry.name}/`)
-        } else if (entry.name.endsWith('.proto')) {
-          const file = await entry.getFile()
-          const content = await file.text()
-          protoFiles.push({ filename: `${path}${entry.name}`, content })
+        if (entry.kind === "directory") {
+          await readRecursive(entry, `${path}${entry.name}/`);
+        } else if (entry.name.endsWith(".proto")) {
+          const file = await entry.getFile();
+          const content = await file.text();
+          protoFiles.push({ filename: `${path}${entry.name}`, content });
         }
       }
     }
 
     try {
-      await readRecursive(dirHandle)
+      await readRecursive(dirHandle);
 
       if (protoFiles.length === 0) {
-        setError('No .proto files found in directory')
-        setLoading(false)
-        return
+        setError("No .proto files found in directory");
+        setLoading(false);
+        return;
       }
 
-      setProtoPath(dirHandle.name)
-      const result = await loadProtoFiles(protoFiles)
+      setProtoPath(dirHandle.name);
+      const result = await loadProtoFiles(protoFiles);
 
       if (result.error) {
-        setError(result.error)
+        setError(result.error);
       } else if (result.services.length === 0) {
-        setError('No services found in proto files')
+        setError("No services found in proto files");
       } else {
-        setServices(result.services)
+        setServices(result.services);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      setError(err instanceof Error ? err.message : String(err));
     }
 
-    setLoading(false)
-  }
+    setLoading(false);
+  };
 
   const handlePathChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setProtoPath(e.target.value)
-  }
+    setProtoPath(e.target.value);
+  };
 
   const handlePathSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
+    e.preventDefault();
     if (protoPath) {
-      await loadProtos(protoPath)
+      await loadProtos(protoPath);
     }
-  }
+  };
 
-  const filteredServices = services.filter(s =>
-    s.shortName.toLowerCase().includes(search.toLowerCase()) ||
-    s.methods.some(m => m.name.toLowerCase().includes(search.toLowerCase()))
-  )
+  const filteredServices = services.filter(
+    (s) =>
+      s.shortName.toLowerCase().includes(search.toLowerCase()) ||
+      s.methods.some((m) =>
+        m.name.toLowerCase().includes(search.toLowerCase()),
+      ),
+  );
 
-  const filteredMethods = selectedService?.methods.filter(m =>
-    m.name.toLowerCase().includes(search.toLowerCase())
-  ) || []
+  const filteredMethods =
+    selectedService?.methods.filter((m) =>
+      m.name.toLowerCase().includes(search.toLowerCase()),
+    ) || [];
 
   return (
     <div className="app">
@@ -491,9 +615,16 @@ function App() {
           />
         </div>
         <button
-          className={`doc-toggle ${showDocPanel ? 'active' : ''}`}
+          className={`pre-script-button ${preScriptState.enabled ? "active" : ""}`}
+          onClick={() => setShowPreScriptModal(true)}
+          title="Pre-Script Settings"
+        >
+          {"{...}"}
+        </button>
+        <button
+          className={`doc-toggle ${showDocPanel ? "active" : ""}`}
           onClick={() => setShowDocPanel(!showDocPanel)}
-          title={showDocPanel ? 'Hide Docs' : 'Show Docs'}
+          title={showDocPanel ? "Hide Docs" : "Show Docs"}
         >
           ◨
         </button>
@@ -508,11 +639,19 @@ function App() {
             onChange={handlePathChange}
             className="proto-path-input"
           />
-          <button type="button" onClick={handleSelectDirectory} className="browse-btn">
+          <button
+            type="button"
+            onClick={handleSelectDirectory}
+            className="browse-btn"
+          >
             Browse
           </button>
-          <button type="submit" className="load-btn" disabled={loading || !protoPath}>
-            {loading ? 'Loading...' : 'Load'}
+          <button
+            type="submit"
+            className="load-btn"
+            disabled={loading || !protoPath}
+          >
+            {loading ? "Loading..." : "Load"}
           </button>
         </form>
         {error && <div className="error-msg">{error}</div>}
@@ -532,13 +671,13 @@ function App() {
             {filteredServices.map((service) => (
               <div
                 key={service.fullName}
-                className={`service-item ${selectedService?.fullName === service.fullName ? 'selected' : ''}`}
+                className={`service-item ${selectedService?.fullName === service.fullName ? "selected" : ""}`}
               >
                 <div
                   className="service-name"
                   onClick={() => {
-                    setSelectedService(service)
-                    setSelectedMethod(null)
+                    setSelectedService(service);
+                    setSelectedMethod(null);
                   }}
                 >
                   {service.shortName}
@@ -548,17 +687,17 @@ function App() {
                 {selectedService?.fullName === service.fullName && (
                   <div className="methods-list">
                     {filteredMethods.map((method) => {
-                      const isDirty = isMethodDirty(service, method)
+                      const isDirty = isMethodDirty(service, method);
                       return (
                         <div
                           key={method.name}
-                          className={`method-item ${selectedMethod?.name === method.name ? 'selected' : ''}`}
+                          className={`method-item ${selectedMethod?.name === method.name ? "selected" : ""}`}
                           onClick={() => setSelectedMethod(method)}
                         >
                           {isDirty && <span className="cache-dot" />}
                           {method.name}
                         </div>
-                      )
+                      );
                     })}
                   </div>
                 )}
@@ -568,7 +707,8 @@ function App() {
 
           {services.length > 0 && (
             <div className="stats">
-              {services.length} services, {services.reduce((acc, s) => acc + s.methods.length, 0)} methods
+              {services.length} services,{" "}
+              {services.reduce((acc, s) => acc + s.methods.length, 0)} methods
             </div>
           )}
         </aside>
@@ -581,13 +721,31 @@ function App() {
               method={selectedMethod}
               baseUrl={baseUrl}
               headersText={headersText}
-              cache={methodCache.get(getMethodKey(selectedService, selectedMethod))}
-              onCacheUpdate={(request, defaultRequest, result) => handleCacheUpdate(selectedService, selectedMethod, request, defaultRequest, result)}
+              cache={methodCache.get(
+                getMethodKey(selectedService, selectedMethod),
+              )}
+              onCacheUpdate={(request, defaultRequest, result) =>
+                handleCacheUpdate(
+                  selectedService,
+                  selectedMethod,
+                  request,
+                  defaultRequest,
+                  result,
+                )
+              }
+              preScriptState={preScriptState}
+              onUpdatePreScriptEnv={(env) =>
+                setPreScriptState((prev) => ({ ...prev, environment: env }))
+              }
+              scriptLogs={scriptLogs}
+              onSetScriptLogs={setScriptLogs}
             />
           ) : (
             <div className="placeholder">
               {services.length === 0 ? (
-                <p>Select a directory containing .proto files to get started.</p>
+                <p>
+                  Select a directory containing .proto files to get started.
+                </p>
               ) : (
                 <p>Select a service and method from the sidebar.</p>
               )}
@@ -597,8 +755,16 @@ function App() {
 
         {selectedMethod && showDocPanel && <DocPanel method={selectedMethod} />}
       </div>
+
+      {showPreScriptModal && (
+        <PreScriptModal
+          preScriptState={preScriptState}
+          onSave={(newState) => setPreScriptState(newState)}
+          onClose={() => setShowPreScriptModal(false)}
+        />
+      )}
     </div>
-  )
+  );
 }
 
-export default App
+export default App;
