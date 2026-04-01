@@ -1,6 +1,74 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import * as protobuf from 'protobufjs'
 
+// Module-level root for Any field decoding
+let _currentRoot: protobuf.Root | null = null
+
+// Convert google.protobuf.Value to native JS (decoded with defaults:false)
+function pbValueToNative(val: any): unknown {
+  if (val == null) return null
+  if ('struct_value' in val && val.struct_value != null) return pbStructToNative(val.struct_value)
+  if ('list_value' in val && val.list_value != null) {
+    return (val.list_value.values || []).map((v: any) => pbValueToNative(v))
+  }
+  if ('bool_value' in val) return val.bool_value
+  if ('string_value' in val) return val.string_value
+  if ('number_value' in val) return val.number_value
+  return null
+}
+
+function pbStructToNative(struct: any): Record<string, unknown> {
+  if (!struct?.fields) return {}
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(struct.fields as Record<string, any>)) {
+    out[k] = pbValueToNative(v)
+  }
+  return out
+}
+
+function decodeAnyFields(obj: any): any {
+  if (obj === null || obj === undefined || typeof obj !== 'object') return obj
+
+  // Detect google.protobuf.Any: has type_url string and value bytes
+  if (typeof obj.type_url === 'string' && obj.value != null && _currentRoot) {
+    const typeName = obj.type_url.split('/').pop()
+    if (typeName) {
+      try {
+        const msgType = _currentRoot.lookupType(typeName)
+        const bytes: Uint8Array = obj.value instanceof Uint8Array ? obj.value : obj.value
+
+        // Well-known Struct types: convert to clean native JSON
+        if (typeName === 'google.protobuf.Struct') {
+          const inner = msgType.toObject(msgType.decode(bytes), { longs: String, enums: String, defaults: false })
+          return pbStructToNative(inner)
+        }
+        if (typeName === 'google.protobuf.Value') {
+          const inner = msgType.toObject(msgType.decode(bytes), { longs: String, enums: String, defaults: false })
+          return pbValueToNative(inner)
+        }
+        if (typeName === 'google.protobuf.ListValue') {
+          const inner = msgType.toObject(msgType.decode(bytes), { longs: String, enums: String, defaults: false })
+          return (inner.values || []).map((v: any) => pbValueToNative(v))
+        }
+
+        const decoded = msgType.decode(bytes)
+        const inner = msgType.toObject(decoded, { longs: String, enums: String, defaults: true })
+        return { '@type': obj.type_url, ...decodeAnyFields(inner) }
+      } catch {
+        return obj
+      }
+    }
+  }
+
+  if (Array.isArray(obj)) return obj.map(decodeAnyFields)
+
+  const result: Record<string, any> = {}
+  for (const [k, v] of Object.entries(obj)) {
+    result[k] = decodeAnyFields(v)
+  }
+  return result
+}
+
 // Google well-known types definitions
 const GOOGLE_PROTOBUF_TYPES = `
 syntax = "proto3";
@@ -400,6 +468,7 @@ export async function loadProtoFiles(protoContents: Array<{ filename: string; co
 
     findServices(root)
 
+    _currentRoot = root
     return { services, root }
   } catch (error) {
     return {
@@ -628,11 +697,11 @@ export async function executeCall(
 
     // Decode response
     const decoded = method.outputType.decode(msgBytes)
-    const responseObj = method.outputType.toObject(decoded, {
+    const responseObj = decodeAnyFields(method.outputType.toObject(decoded, {
       longs: String,
       enums: String,
       defaults: true,
-    })
+    }))
 
     return {
       response: responseObj,
