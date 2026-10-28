@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import * as protobuf from 'protobufjs'
+import descriptorJson from 'protobufjs/google/protobuf/descriptor.json'
 
 // Module-level root for Any field decoding
 let _currentRoot: protobuf.Root | null = null
@@ -248,6 +249,9 @@ export function extractFields(msgType: protobuf.Type): FieldMeta[] {
 export async function loadProtoFiles(protoContents: Array<{ filename: string; content: string }>): Promise<LoadResult> {
   try {
     const root = new protobuf.Root()
+
+    // descriptor.proto, so custom options (extend google.protobuf.MethodOptions etc.) resolve
+    root.addJSON((descriptorJson as any).nested)
 
     // Define Google well-known types using protobufjs common
     protobuf.common('google/protobuf/timestamp.proto', {
